@@ -99,6 +99,7 @@ def init_args():
     parser.add_argument("--rec_image_shape", type=str, default="3, 48, 320")
     parser.add_argument("--rec_batch_num", type=int, default=6)
     parser.add_argument("--max_text_length", type=int, default=25)
+    parser.add_argument("--max_input_width", type=int)
     parser.add_argument(
         "--rec_char_dict_path", type=str, default="./ppocr/utils/ppocr_keys_v1.txt"
     )

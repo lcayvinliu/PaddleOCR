@@ -41,6 +41,7 @@ class TextRecognizer(object):
         if logger is None:
             logger = get_logger()
         self.rec_image_shape = [int(v) for v in args.rec_image_shape.split(",")]
+        self.max_input_width = args.max_input_width
         self.rec_batch_num = args.rec_batch_num
         self.rec_algorithm = args.rec_algorithm
         postprocess_params = {
@@ -205,6 +206,8 @@ class TextRecognizer(object):
 
         assert imgC == img.shape[2]
         imgW = int((imgH * max_wh_ratio))
+        if self.max_input_width is not None:
+            imgW = min(imgW, self.max_input_width)
         if self.use_onnx:
             w = self.input_tensor.shape[3:][0]
             if isinstance(w, str):
