@@ -21,6 +21,9 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import math
+import sys
+
 import numpy as np
 import cv2
 import random
@@ -126,6 +129,160 @@ def crop_area(im, text_polys, min_crop_side_ratio, max_tries):
     return 0, 0, w, h
 
 
+class DetResizeForTrain(object):
+    def __init__(
+        self,
+        limit_side_len,
+        limit_type,
+        **kwargs
+    ):
+        super(DetResizeForTrain, self).__init__()
+        self.resize_type = 0
+        self.keep_ratio = False
+        self.limit_side_len = limit_side_len
+        self.limit_type = limit_type
+
+    def __call__(self, data):
+        img = data["image"]
+        ignore_tags = data["ignore_tags"]
+        texts = data["texts"]
+        src_h, src_w, _ = img.shape
+        if sum([src_h, src_w]) < 64:
+            img = self.image_padding(img)
+
+        img, [ratio_h, ratio_w] = self.resize_image_type0(img)
+
+        # data["image"] = img
+        new_h, new_w, new_c = img.shape
+        ## scale text_polys
+        text_polys = data["polys"]
+        test_polys_scaled = []
+        ignore_tags_crop = []
+        texts_crop = []
+        for poly, text, tag in zip(text_polys, texts, ignore_tags):
+            poly[:, 0] = poly[:, 0] * ratio_w
+            poly[:, 1] = poly[:, 1] * ratio_h
+
+            if not is_poly_outside_rect(poly, 0, 0, new_w, new_h):
+                test_polys_scaled.append(poly)
+                ignore_tags_crop.append(tag)
+                texts_crop.append(text)
+
+        data["polys"] = np.array(test_polys_scaled)
+        data["ignore_tags"] = ignore_tags_crop
+        data["texts"] = texts_crop
+
+        ## paddingd to 960, set mask
+
+        new_h, new_w, new_c = img.shape
+
+        mask = None
+        if not (new_h == self.limit_side_len and new_w == self.limit_side_len):
+            im_pad = np.zeros((self.limit_side_len, self.limit_side_len, new_c), np.uint8)
+            im_pad[:new_h, :new_w, :] = img
+            mask = np.zeros((self.limit_side_len, self.limit_side_len), np.uint8)
+            mask[:new_h, :new_w] = 1
+            img = im_pad
+
+        data["image"] = img
+        data["crop_mask"] = mask
+        return data
+
+    def image_padding(self, im, value=0):
+        h, w, c = im.shape
+        im_pad = np.zeros((max(32, h), max(32, w), c), np.uint8) + value
+        im_pad[:h, :w, :] = im
+        return im_pad
+
+    def resize_image_type1(self, img):
+        resize_h, resize_w = self.image_shape
+        ori_h, ori_w = img.shape[:2]  # (h, w, c)
+        if self.keep_ratio is True:
+            resize_w = ori_w * resize_h / ori_h
+            N = math.ceil(resize_w / 32)
+            resize_w = N * 32
+        ratio_h = float(resize_h) / ori_h
+        ratio_w = float(resize_w) / ori_w
+        img = cv2.resize(img, (int(resize_w), int(resize_h)))
+        # return img, np.array([ori_h, ori_w])
+        return img, [ratio_h, ratio_w]
+
+    def resize_image_type0(self, img):
+        """
+        resize image to a size multiple of 32 which is required by the network
+        args:
+            img(array): array with shape [h, w, c]
+        return(tuple):
+            img, (ratio_h, ratio_w)
+        """
+        limit_side_len = self.limit_side_len
+        h, w, c = img.shape
+
+        # limit the max side
+        if self.limit_type == "max":
+            if max(h, w) > limit_side_len:
+                if h > w:
+                    ratio = float(limit_side_len) / h
+                else:
+                    ratio = float(limit_side_len) / w
+            else:
+                ratio = 1.0
+        elif self.limit_type == "min":
+            if min(h, w) < limit_side_len:
+                if h < w:
+                    ratio = float(limit_side_len) / h
+                else:
+                    ratio = float(limit_side_len) / w
+            else:
+                ratio = 1.0
+        elif self.limit_type == "resize_long":
+            ratio = float(limit_side_len) / max(h, w)
+        else:
+            raise Exception("not support limit type, image ")
+        resize_h = int(h * ratio)
+        resize_w = int(w * ratio)
+
+        resize_h = max(int(round(resize_h / 32) * 32), 32)
+        resize_w = max(int(round(resize_w / 32) * 32), 32)
+
+        try:
+            if int(resize_w) <= 0 or int(resize_h) <= 0:
+                return None, (None, None)
+            img = cv2.resize(img, (int(resize_w), int(resize_h)))
+        except:
+            print(img.shape, resize_w, resize_h)
+            sys.exit(0)
+        ratio_h = resize_h / float(h)
+        ratio_w = resize_w / float(w)
+        return img, [ratio_h, ratio_w]
+
+class AugmentEastRandomCropData(object):
+    def __init__(
+        self,
+        size=(640, 640),
+        max_tries=10,
+        min_crop_side_ratio=0.1,
+        keep_ratio=True,
+        limit_side_len=640,
+        limit_type="max",
+        prob=0.5,
+        **kwargs,
+    ):
+        self.size = size
+        self.max_tries = max_tries
+        self.min_crop_side_ratio = min_crop_side_ratio
+        self.keep_ratio = keep_ratio
+        self.east_random_crop_data = EastRandomCropData(size, max_tries, min_crop_side_ratio, keep_ratio)
+        self.det_resize_for_test = DetResizeForTrain(limit_side_len, limit_type)
+        self.prob = prob
+
+    def __call__(self, data):
+        if random.random() < self.prob:
+            data = self.east_random_crop_data(data)
+        else:
+            data = self.det_resize_for_test(data)
+        return data
+
 class EastRandomCropData(object):
     def __init__(
         self,
@@ -156,11 +313,14 @@ class EastRandomCropData(object):
         scale = min(scale_w, scale_h)
         h = int(crop_h * scale)
         w = int(crop_w * scale)
+        mask = None
         if self.keep_ratio:
             padimg = np.zeros((self.size[1], self.size[0], img.shape[2]), img.dtype)
+            mask = np.zeros((self.size[1], self.size[0]), img.dtype)
             padimg[:h, :w] = cv2.resize(
                 img[crop_y : crop_y + crop_h, crop_x : crop_x + crop_w], (w, h)
             )
+            mask[:h, :w] = 1
             img = padimg
         else:
             img = cv2.resize(
@@ -181,8 +341,8 @@ class EastRandomCropData(object):
         data["polys"] = np.array(text_polys_crop)
         data["ignore_tags"] = ignore_tags_crop
         data["texts"] = texts_crop
+        data["crop_mask"] = mask
         return data
-
 
 class RandomCropImgMask(object):
     def __init__(self, size, main_key, crop_keys, p=3 / 8, **kwargs):
