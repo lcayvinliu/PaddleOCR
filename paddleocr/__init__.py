@@ -32,10 +32,12 @@ from ._pipelines import (
     FormulaRecognitionPipeline,
     PaddleOCR,
     PPChatOCRv4Doc,
+    PPDocTranslation,
     PPStructureV3,
     SealRecognition,
     TableRecognitionPipelineV2,
 )
+from ._utils.logging import logger
 from ._version import version as __version__
 
 __all__ = [
@@ -56,8 +58,10 @@ __all__ = [
     "FormulaRecognitionPipeline",
     "PaddleOCR",
     "PPChatOCRv4Doc",
+    "PPDocTranslation",
     "PPStructureV3",
     "SealRecognition",
     "TableRecognitionPipelineV2",
+    "logger",
     "__version__",
 ]
